@@ -1,86 +1,125 @@
-# Rotativa: IP nueva en cada petición
-# HTTP/HTTPS -> puerto 823
-http://usuario:clave@gw.dataimpulse.com:823
+# walmart proxies: choosing US residential IPs for price monitoring, product scraping and store-level stock checks
 
-# SOCKS5 -> puerto 824
-socks5://usuario:clave@gw.dataimpulse.com:824
+People searching this term are usually past the research phase. Their scraper already runs, it already returns HTTP 200, and the HTML is still wrong. Walmart answered, just not with a product page. Fixing that is mostly about which exit IPs you send and how you keep a session alive, and the money question after that is what a usable page actually costs you.
 
-# Sticky: mantiene la misma IP según el ID de sesión
-http://usuario:clave_sesión-abc123@gw.dataimpulse.com:823
+## "Walmart proxies" covers three jobs that need different IPs
 
-# Segmentación por país incluida en el precio base
-http://usuario:clave_país-es@gw.dataimpulse.com:823
+The phrase gets used for at least three workloads, and they don't have the same requirements.
 
+**Catalog work.** Search results, product pages, review sections, category crawls. Stateless reads at volume. This wants rotating residential IPs that spread requests across many exits so no single address builds up the repetitive footprint of a monitor.
 
-La autenticación se hace por usuario y contraseña o por lista blanca de IP, y puedes elegir método distinto por proyecto.
+**Store-pinned pricing and stock.** Walmart localizes price, pickup options and availability by store and ZIP, so the same SKU shows different numbers depending on where the request appears to come from. This wants one consistent US location held for the whole run, meaning sticky sessions or static residential addresses, not per-request rotation.
 
-### Rotativa o sticky: la decisión que más afecta a tu tasa de éxito
+**Account-bound flows.** Marketplace seller dashboards, anything logged in. Rotation logs you out mid-session, so these need a static IP tied to one identity.
 
-Las sesiones rotativas cambian de IP con cada petición. Son lo que quieres para rastreo de volumen alto y para repartir peticiones repetidas entre muchas identidades.
+Mix these up and you get the classic result: a crawl that works for search pages and returns nonsense prices because the exit IP moved from Ohio to Texas between requests.
 
-Las sticky mantienen la misma IP ligada a un puerto durante un intervalo. En DataImpulse duran de 1 a 120 minutos, con 30 minutos por defecto si no especificas nada, y usan el rango de puertos 10000–20000. Son las que necesitas cuando hay login de por medio, carritos, formularios multi-paso o cualquier flujo donde el sitio espera continuidad. Hay que tener cuidado con dos detalles prácticos: en un login, nunca dejes que la IP cambie a mitad de sesión; y si automatizas con navegadores antidetect, alinea idioma y zona horaria del perfil con el país del proxy, o el fingerprint delata la incoherencia.
+## Why the first attempt usually returns a challenge page
 
-## Segmentación: dónde se te va el presupuesto si no miras
+Walmart runs its edge through PerimeterX, and the scoring is not a simple country check. A few things decide whether you get a product page:
 
-Aquí está la diferencia que casi ninguna landing de proveedor explica con claridad.
+**IP type and ASN.** Datacenter ranges get challenged or served degraded pages early. One provider's published comparison puts datacenter success on Walmart-style targets at roughly 10–30%, against 90–95% for residential, with the datacenter figure requiring three to ten retries per product. Treat those as that vendor's estimates rather than gospel, but the direction is consistent everywhere you look.
 
-- **Nivel país:** incluido sin coste en todas las líneas. Es el único filtro "gratis" que necesitas para el 80% de proyectos.
-- **Estado, ciudad, código postal, ASN:** en el residencial estándar se factura al doble de la tarifa por GB. Es decir, un proyecto de precios locales por ciudad con residencial a $1/GB en la práctica te cuesta $2/GB.
-- **En centro de datos:** según la propia web del proveedor, estos filtros aparecen incluidos; si vas a basar el presupuesto en ello, confírmalo con soporte antes de comprar.
-- **En residencial premium:** todos los filtros van incluidos sin recargo.
+**Geo and store consistency.** An exit in one state with a browser timezone or saved ZIP in another produces inconsistent pages and extra verification prompts. Walmart keys price and stock to a selected store, so the store selection has to survive the whole run.
 
-De ahí sale una regla simple: si tu segmentación va a ser por ciudad o ASN y trabajas en volumen, compara el coste del residencial premium contra el del residencial estándar con recargo antes de decidir. A veces el "caro" sale más barato.
+**TLS and HTTP/2 fingerprint.** A stock HTTP client fails even on a clean residential IP, because the handshake and header order don't match any real browser build.
 
-## ¿Existen cupones de DataImpulse?
+**Request cadence per exit.** Volume per IP inside a short window matters more than total volume. Bursts from a single exit trigger throttling long before the same request count spread across a rotating pool.
 
-Es una búsqueda constante y la respuesta honesta es que no hay un código oficial que aplicar. Las páginas que recopilan cupones llegan a la misma conclusión: con $1/GB, tráfico que no caduca y sin suscripción, el descuento real no viene de un código, viene del volumen ($0,80/GB en el tramo de 1 TB).
+**Session and cookie continuity.** Challenge cookies and store cookies need to persist within a session. Rotate the whole identity between sessions, never mid-session.
 
-Dicho esto, un aviso práctico: desconfía de cualquier "cupón" de terceros que te pida datos de tarjeta o registro en una web intermedia. El precio ya está publicado en el sitio del proveedor y no hay pasos extra legítimos para conseguirlo.
+The expensive failure here is silent. A pipeline that treats 200 OK as success will quietly ingest challenge pages into your dataset, and you'll only notice when your price history has a wall of identical values.
 
-👉 [Comprobar el precio vigente y los paquetes disponibles](https://bit.ly/dataimPulse)
+## Matching proxy type to the Walmart job
 
-## Cuántos GB necesitas antes de escalar
+| Job | What to use | Why |
+| --- | --- | --- |
+| Search, product, review crawls at volume | Rotating residential, US | Passes IP reputation checks, spreads cadence, region-targetable |
+| Store or ZIP-pinned price and stock checks | Sticky residential or ISP | Location has to hold for the session to stay internally consistent |
+| Logged-in seller dashboard or cart flows | Sticky residential or ISP | Rotation breaks the session |
+| Parser and rotation logic testing | Datacenter | Cheapest tier, expect captchas on live Walmart pages |
+| The most defended flows, mobile web validation | Mobile (4G/5G) | Carrier IPs shared by many real users, rarely blocked, priciest per GB |
 
-Esta es la parte aritmética que casi todos hacen mal. Como referencia aproximada: una página HTML sin imágenes suele moverse entre 100 KB y 1 MB, así que 5 GB dan para decenas de miles de páginas si desactivas la carga de recursos pesados. En cuanto metes imágenes o navegas con navegador real, el consumo se multiplica y ese mismo paquete se agota en una tarde de pruebas.
+The rule underneath that table is boring and saves the most money: use the cheapest tier the target actually tolerates, and move up only when captcha rates force you. Reaching for mobile on a job that rotating residential handles is just burning budget.
 
-Mi recomendación de secuencia: empieza con el paquete mínimo, valida en tus propios objetivos (no en los del vendedor), calcula tu coste por registro útil y solo entonces sube de tramo. El pool de 90 millones de IP no sirve de nada si tu caso concreto no pasa el anti-bot de tu sitio objetivo.
+## The number your budget actually depends on
 
-## Qué dicen las reseñas de terceros
+Cost per GB is the sticker. Cost per successful page is the bill. If a Walmart product page weighs roughly 500 KB, then 10,000 pages a day is about 5 GB a day, or 150 GB a month before retries. At $1/GB that's $150 a month. At the more common $3 to $8 per GB, the same crawl runs $450 to $1,200.
 
-Hay pocas reseñas independientes largas, y eso ya es información. La que más se cita es la de TechRadar, que destaca el punto de entrada de $1/GB, el tamaño del pool residencial y las sesiones rotativas y sticky; en sus pruebas señala tasas de éxito altas en tareas de scraping.
+Now add the part people forget. You pay for retry traffic, so a 60% success rate makes your effective cost per usable page roughly 1.7× the sticker price. That is the real reason a cheap provider with a weak pass rate loses to a slightly pricier one. Run the arithmetic against your own numbers before you pick a tier, not after.
 
-El análisis de AIMultiple es más útil porque también lista los contras: los descuentos por volumen de móvil y residencial premium se activan a partir de 1 TB, y la segmentación avanzada (estado, ciudad, ZIP, ASN) se factura al doble en los planes residenciales estándar. Coincide con lo que ves en la web del proveedor.
+## What DataImpulse charges for the tiers a Walmart job needs
 
-También circulan menciones a una política de reembolso de 7 días para las primeras compras y a una puntuación de 4,8/5 en G2. Si ese derecho de devolución condiciona tu decisión, confírmalo directamente con soporte antes de pagar: es el tipo de condición que cambia sin aviso.
+DataImpulse runs a pay-as-you-go model with no subscription, a $5 minimum, and traffic that doesn't expire. Four product types, all sharing the same account and the same 195-country pool of 90M+ IPs.
 
-## Errores típicos al comprar proxy residencial
+| Product | Package | Traffic included | Price per GB | Billing | Buy |
+| --- | --- | --- | --- | --- | --- |
+| Residential | Intro | 5 GB | $1.00/GB | Pay-as-you-go, $5 | [ Start the $5 residential intro](https://bit.ly/dataimPulse) |
+| Residential | Standard | any volume | $1.00/GB | Pay-as-you-go | [ Buy residential traffic](https://bit.ly/dataimPulse) |
+| Residential | Advanced | 1 TB | $0.80/GB | Pay-as-you-go, $800 | [ See the 1 TB rate](https://bit.ly/dataimPulse) |
+| Residential | Bulk | 5 TB | $0.70/GB | Custom | [ Compare bulk pricing](https://bit.ly/dataimPulse) |
+| Datacenter | Intro | 10 GB | $0.50/GB | Pay-as-you-go, $5 | [ Try datacenter traffic](https://bit.ly/dataimPulse) |
+| Datacenter | Mid | 100 GB | $0.50/GB | Pay-as-you-go, $50 | [ Check datacenter plans](https://bit.ly/dataimPulse) |
+| Datacenter | Advanced | 1 TB | $0.45/GB | Pay-as-you-go, $450 | [ See the 1 TB datacenter rate](https://bit.ly/dataimPulse) |
+| Datacenter | Bulk | 5 TB+ | Custom | From $2,250 | [ Request bulk datacenter pricing](https://bit.ly/dataimPulse) |
+| Mobile | Intro | 2.5 GB | $2.00/GB | Pay-as-you-go, $5 | [ Try mobile proxies](https://bit.ly/dataimPulse) |
+| Mobile | Mid | 25 GB | $2.00/GB | Pay-as-you-go, $50 | [ Check mobile plans](https://bit.ly/dataimPulse) |
+| Mobile | Advanced | 1 TB | $1.60/GB | Pay-as-you-go, $1,600 | [ See the 1 TB mobile rate](https://bit.ly/dataimPulse) |
+| Mobile | Bulk | 5 TB+ | Custom | From $8,000 | [ Request bulk mobile pricing](https://bit.ly/dataimPulse) |
+| Premium residential | Intro | 1 GB | $5.00/GB | Pay-as-you-go, $5 | [ Try premium residential](https://dataimpulse.com/premium-residential-proxies/?aff=86938) |
+| Premium residential | Mid | 10 GB | $5.00/GB | Pay-as-you-go, $50 | [ Compare premium residential plans](https://dataimpulse.com/premium-residential-proxies/?aff=86938) |
+| Premium residential | Bulk | 5 TB+ | Custom | From $20,000 | [ Ask about premium volume pricing](https://dataimpulse.com/premium-residential-proxies/?aff=86938) |
 
-- **Comprar residencial para todo.** Si el objetivo no filtra por reputación de IP, el centro de datos cuesta la mitad ($0,50/GB frente a $1/GB).
-- **Elegir suscripción cuando tu uso es irregular.** Es el error más caro: pagas GB que se reinician y desaparecen.
-- **Ignorar el recargo por segmentación.** Un proyecto por ciudad con residencial estándar puede costar el doble de lo que dice la portada.
-- **Asumir que 1 GB rinde igual en todos los casos.** Depende de imágenes, navegador, reintentos y peso del sitio objetivo.
-- **Dar por hecho que un pool grande equivale a éxito.** Lo que importa es el origen de las IP y el historial de abuso que arrastran.
+A few details that affect the Walmart decision more than the headline rate:
 
-Sobre ese último punto, DataImpulse insiste en que su pool es de origen propio y con consentimiento del usuario, no revendido, y publica una tasa de éxito del 99,51%. Es una afirmación de parte, así que trátala como lo que es: un dato del vendedor, útil como punto de comparación, no como prueba.
+- Country targeting is included. **State, city, ZIP and ASN targeting is a paid add-on, billed at 2× the standard rate on standard residential.** For US Walmart work you need it, because price and stock are tied to a store and ZIP. That turns your effective rate on targeted traffic into $2/GB.
+- Premium residential includes all targeting options with no surcharge, plus a dedicated account manager, which changes the math if your job is targeting-heavy rather than high-volume.
+- Protocols are HTTP/HTTPS and SOCKS5, with rotating and sticky sessions. Published success rate is 99.51%, and the service is rated 4.8/5 on G2 with 24/7 human support.
+- There's no free trial. Entry is the $5 intro, and intro plans carry a 7-day money-back window for card payments if under 80% of the traffic is consumed. Crypto purchases on intro plans aren't refundable.
+- Unused traffic doesn't expire, which matters for Walmart specifically. Collection volume follows Rollback events, Black Friday and Walmart+ promotions, so a monthly subscription you don't finish is wasted money.
 
-## Merece la pena o no
+## Setting up a Walmart job on DataImpulse
 
-Para uso intermitente y para probar varios mercados, el modelo de pago por uso con tráfico sin caducidad encaja mejor que casi cualquier suscripción. Puedes empezar con $5, medir y escalar solo si los números salen. Ese es el argumento fuerte, y no depende de marketing.
+The proxies are the infrastructure. The rest is your client, and that's where most setups break.
 
-Lo que no te van a contar: a partir de 1 TB el residencial estándar baja a $0,80/GB, así que si tu volumen es alto, compara con proveedores que en ese rango ya están en $0,50/GB o menos. Y si tu caso depende de filtros por ciudad o ASN, haz la cuenta con el recargo del doble, o mira directamente la línea premium.
+1. **Buy the residential intro.** $5 buys 5 GB, which at roughly 500 KB per product page is somewhere near 10,000 page loads before retries. That's enough to measure your real success rate on Walmart's actual pages. If you're only testing parser logic, the $10 GB datacenter intro costs the same $5.
+2. **Set country to US, then add state or city targeting for the markets you track.** Store-level pricing won't line up without it. Budget for the 2× surcharge on that traffic or move the job to the premium pool.
+3. **Choose rotation by job, not preference.** Rotating for search, product and review crawls. Sticky sessions for store or ZIP-pinned runs and anything session-bound.
+4. **Pair the pool with a fingerprint-aware client.** A headless browser set up with realistic TLS and HTTP/2 fingerprints, or curl-impersonate for lighter reads. A residential IP behind a bare HTTP library still gets read as automation.
+5. **Persist cookies inside a session and rotate whole identities between sessions.** Store cookies and challenge cookies travel together. Changing IP mid-run breaks the store selection and scrambles the data.
+6. **Verify your exits before the big run.** Confirm the IPs are alive and landing in the right US region before you commit bandwidth to a 10,000-page job.
+7. **Log more than status codes.** Track challenge-page rate, retry rate, and bytes per successful page. Those three numbers tell you whether to stay on the current tier or move up.
 
-👉 [Empezar con el paquete de 5 GB y validar tu coste real](https://bit.ly/dataimPulse)
+## Where mobile fits, and where it's a waste
 
-## Preguntas frecuentes
+Mobile proxies cost $2/GB at entry, and carrier IPs are shared by large numbers of real users, which gives them excellent reputation. Most Walmart catalog work never needs them. They earn their price on the most defended flows and on mobile-web validation, where you specifically need to see what m.walmart.com serves to a phone.
 
-**¿Hace falta suscripción?** No. Se compra tráfico y se consume cuando quieras; los GB no caducan.
+The interesting comparison is mobile at $2/GB against standard residential with advanced targeting at 2×, which also lands at $2/GB. If your Walmart job is almost entirely store or ZIP-targeted, that's a legitimate either-or rather than a ladder to climb. Broad regional crawls with occasional targeted checks are the case where standard residential still wins clearly.
 
-**¿Qué protocolos soporta?** HTTP, HTTPS y SOCKS5.
+## What outside data says
 
-**¿Cuánto dura una sesión sticky?** Entre 1 y 120 minutos, con 30 minutos por defecto si no se especifica intervalo.
+Independent tracking puts DataImpulse at the top of e-commerce-focused residential rankings for retail targets like Walmart and Amazon, with a measured 93.1% success rate, a median response time around 503ms, and clean IP share near 99%, based on rolling 30-day data and no paid placements according to the tracker itself. A separate review site rates the no-expiry, pay-per-traffic model as the genuinely differentiated part for buyers who run proxies intermittently or in test phases.
 
-**¿Puedo elegir ciudad o código postal?** Sí, pero en el residencial estándar esos filtros se facturan al doble de la tarifa por GB. En premium van incluidos.
+Community threads tell a similar story with less polish. In a r/DataHoarder discussion about scraping Walmart, one commenter pushed back on the idea that IP quality is the main problem, arguing that fingerprinting and session handling cause more failures, and suggested DataImpulse as worth a small test rather than a full commitment. That lines up with what you'll see in your own logs: the proxy is necessary, the client still has to be right.
 
-**¿Cuántos GB necesito para empezar?** Con uso irregular, el paquete mínimo basta para validar. Una página HTML ronda los 100 KB–1 MB; con navegador e imágenes reales, el consumo sube muy rápido.
+One practical note before you scale anything: Walmart's terms constrain how you can collect and use its data, and if you're tracking advertised prices to enforce MAP agreements, the enforcement side has its own contractual requirements. Worth a look before a production pipeline, not after.
 
-**¿Es legal usar proxies residenciales?** Depende de para qué. Acceder a datos públicos con proxies no es ilegal en sí, pero las condiciones de cada sitio y la normativa local marcan los límites. Es una decisión tuya, no del proveedor.
+## Quick answers
+
+**Does a cheap datacenter pool work on Walmart?** For live product pages at any real volume, no. Use it for parser testing and non-Walmart pages, and route the actual Walmart reads through residential.
+
+**Rotating or sticky for price monitoring?** Rotating for stateless page reads. Sticky whenever the store selection has to survive the run.
+
+**How much traffic does a monthly Walmart crawl take?** Work from your own page size, but 10,000 product pages a day at roughly 500 KB each is about 150 GB a month before retries. At $1/GB that's $150.
+
+**Is there a free trial?** No. The $5 intro is the entry point, backed by a 7-day money-back window on card purchases with under 80% of traffic used.
+
+**What's the smallest sensible test?** 5 GB of residential traffic pointed at a few hundred real Walmart product URLs with a fingerprint-aware browser, logged by cost per successful page rather than cost per GB.
+
+## The short version
+
+Walmart doesn't reject you at the front door. It scores you, and then hands you a page that looks fine until your parser reads it. Rotating US residential handles product and search crawling, sticky sessions protect store-level pricing, and the traffic accounting decides which tier is worth paying for.
+
+At $1/GB with non-expiring traffic and a $5 entry, DataImpulse makes the failure case cheap to find. Just price the targeting surcharge into the decision, pair the pool with a client that looks like a browser, and judge everything by cost per successful page instead of the sticker rate.
+
+👉 [Set up a DataImpulse account and put the $5 residential intro against your own Walmart URLs](https://bit.ly/dataimPulse)
